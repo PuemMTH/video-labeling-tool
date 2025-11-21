@@ -29,6 +29,8 @@ function App() {
   const [isRecording, setIsRecording] = createSignal(false);
   const [startFrame, setStartFrame] = createSignal<number | null>(null);
   const [currentFrame, setCurrentFrame] = createSignal<number>(0);
+  const [duration, setDuration] = createSignal<number>(0);
+  const [totalFrames, setTotalFrames] = createSignal<number>(0);
   let videoRef: HTMLVideoElement | undefined;
 
   // Load saved folder on mount
@@ -144,7 +146,9 @@ function App() {
       // Get metadata (FPS)
       const metadata = await invoke<VideoMetadata>("get_video_metadata", { path: entry.path });
       setFps(metadata.fps);
-      console.log("FPS:", metadata.fps);
+      setDuration(metadata.duration);
+      setTotalFrames(Math.round(metadata.duration * metadata.fps));
+      console.log("FPS:", metadata.fps, "Duration:", metadata.duration);
 
       // Load labels if exist
       const labelContent = await invoke<string | null>("load_video_labels", { videoPath: entry.path });
@@ -269,6 +273,57 @@ function App() {
                     </div>
                   </Show>
                 </div>
+                {/* Timeline Bar */}
+                <Show when={totalFrames() > 0}>
+                  <div class="w-full h-4 bg-base-300 rounded-full mt-2 relative overflow-hidden cursor-pointer"
+                    onClick={(e) => {
+                      if (videoRef && fps() > 0) {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        const x = e.clientX - rect.left;
+                        const percentage = x / rect.width;
+                        videoRef.currentTime = percentage * duration();
+                      }
+                    }}
+                  >
+                    {/* Current Progress */}
+                    <div
+                      class="absolute top-0 left-0 h-full bg-base-content/20 pointer-events-none"
+                      style={{ width: `${(currentFrame() / totalFrames()) * 100}%` }}
+                    ></div>
+
+                    {/* Events */}
+                    <For each={events()}>
+                      {(event) => {
+                        const startPercent = (event.start_frame / totalFrames()) * 100;
+                        const endPercent = (event.end_frame / totalFrames()) * 100;
+                        const beforeStartPercent = (event.before_start_frame / totalFrames()) * 100;
+
+                        return (
+                          <>
+                            {/* Warning Zone (Orange) */}
+                            <div
+                              class="absolute top-0 h-full bg-warning/70"
+                              style={{
+                                left: `${beforeStartPercent}%`,
+                                width: `${startPercent - beforeStartPercent}%`
+                              }}
+                              title={`Warning: ${event.label}`}
+                            ></div>
+                            {/* Active Zone (Red) */}
+                            <div
+                              class="absolute top-0 h-full bg-error/70"
+                              style={{
+                                left: `${startPercent}%`,
+                                width: `${endPercent - startPercent}%`
+                              }}
+                              title={`Event: ${event.label}`}
+                            ></div>
+                          </>
+                        );
+                      }}
+                    </For>
+                  </div>
+                </Show>
               </div>
             </Show>
           </Show>
