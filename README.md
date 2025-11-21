@@ -41,7 +41,7 @@ To build the application for production, follow the instructions for your operat
 
 ### Linux
 
-1.  Ensure you have the necessary system dependencies installed (see [Tauri Linux Setup](https://tauri.app/v1/guides/getting-started/prerequisites#linux)).
+1.  Ensure you have the necessary system dependencies installed (see [Tauri Linux Setup](https://v2.tauri.app/start/prerequisites/#linux)).
 2.  Run the build command:
     ```bash
     npm run tauri build
