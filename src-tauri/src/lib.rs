@@ -21,8 +21,14 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+#[derive(serde::Serialize)]
+struct VideoEntry {
+    path: String,
+    event_count: usize,
+}
+
 #[tauri::command]
-fn scan_videos(path: String) -> Vec<String> {
+fn scan_videos(path: String) -> Vec<VideoEntry> {
     let mut videos = Vec::new();
     if let Ok(entries) = std::fs::read_dir(path) {
         for entry in entries {
@@ -35,7 +41,29 @@ fn scan_videos(path: String) -> Vec<String> {
                             .contains(&ext.as_str())
                         {
                             if let Some(path_str) = path.to_str() {
-                                videos.push(path_str.to_string());
+                                let file_stem = path.file_stem().unwrap_or_default();
+                                let json_path = path.with_file_name(format!(
+                                    "{}.json",
+                                    file_stem.to_string_lossy()
+                                ));
+
+                                let mut event_count = 0;
+                                if json_path.exists() {
+                                    if let Ok(content) = std::fs::read_to_string(&json_path) {
+                                        if let Ok(json) =
+                                            serde_json::from_str::<serde_json::Value>(&content)
+                                        {
+                                            if let Some(events) = json["events"].as_array() {
+                                                event_count = events.len();
+                                            }
+                                        }
+                                    }
+                                }
+
+                                videos.push(VideoEntry {
+                                    path: path_str.to_string(),
+                                    event_count,
+                                });
                             }
                         }
                     }
@@ -235,7 +263,10 @@ async fn serve_video(
                 // Read chunk
                 let mut file = match fs::File::open(&path) {
                     Ok(f) => f,
-                    Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to open file").into_response(),
+                    Err(_) => {
+                        return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to open file")
+                            .into_response()
+                    }
                 };
 
                 use std::io::{Read, Seek, SeekFrom};
@@ -254,12 +285,16 @@ async fn serve_video(
                     [
                         (header::CONTENT_TYPE, content_type),
                         (header::CONTENT_LENGTH, &chunk_size.to_string()),
-                        (header::CONTENT_RANGE, &format!("bytes {}-{}/{}", start, end, file_size)),
+                        (
+                            header::CONTENT_RANGE,
+                            &format!("bytes {}-{}/{}", start, end, file_size),
+                        ),
                         (header::ACCEPT_RANGES, "bytes"),
                         (header::CACHE_CONTROL, "public, max-age=31536000"),
                     ],
-                    buffer
-                ).into_response();
+                    buffer,
+                )
+                    .into_response();
             }
         }
     }
@@ -267,7 +302,9 @@ async fn serve_video(
     // No range request - send full file
     let file = match fs::read(&path) {
         Ok(data) => data,
-        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read file").into_response(),
+        Err(_) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read file").into_response()
+        }
     };
 
     (
@@ -278,8 +315,9 @@ async fn serve_video(
             (header::ACCEPT_RANGES, "bytes"),
             (header::CACHE_CONTROL, "public, max-age=31536000"),
         ],
-        file
-    ).into_response()
+        file,
+    )
+        .into_response()
 }
 
 async fn start_video_server(registry: VideoRegistry) {
@@ -330,7 +368,10 @@ pub fn run() {
             check_ffmpeg,
             read_video_chunk,
             get_video_size,
-            register_video
+            register_video,
+            get_video_metadata,
+            save_video_labels,
+            load_video_labels
         ])
         .setup(|_app| {
             // Start video server after Tauri runtime is ready
@@ -341,4 +382,100 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[derive(serde::Serialize)]
+struct VideoMetadata {
+    fps: f64,
+    duration: f64,
+}
+
+#[tauri::command]
+fn get_video_metadata(path: String) -> Result<VideoMetadata, String> {
+    let output = Command::new("ffprobe")
+        .args([
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=r_frame_rate,duration",
+            "-of",
+            "json",
+            &path,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "ffprobe failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let output_str = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value =
+        serde_json::from_str(&output_str).map_err(|e| format!("Failed to parse JSON: {}", e))?;
+
+    let stream = &json["streams"][0];
+
+    // Parse FPS (e.g., "30/1" or "29.97")
+    let r_frame_rate = stream["r_frame_rate"].as_str().ok_or("FPS not found")?;
+
+    let fps = if r_frame_rate.contains('/') {
+        let parts: Vec<&str> = r_frame_rate.split('/').collect();
+        if parts.len() == 2 {
+            let num: f64 = parts[0].parse().unwrap_or(0.0);
+            let den: f64 = parts[1].parse().unwrap_or(1.0);
+            if den == 0.0 {
+                0.0
+            } else {
+                num / den
+            }
+        } else {
+            0.0
+        }
+    } else {
+        r_frame_rate.parse().unwrap_or(0.0)
+    };
+
+    let duration: f64 = stream["duration"]
+        .as_str()
+        .unwrap_or("0")
+        .parse()
+        .unwrap_or(0.0);
+
+    Ok(VideoMetadata { fps, duration })
+}
+
+#[tauri::command]
+fn save_video_labels(video_path: String, json_content: String) -> Result<(), String> {
+    let video_path = PathBuf::from(video_path);
+    let parent = video_path.parent().ok_or("Invalid video path")?;
+    let file_stem = video_path.file_stem().ok_or("Invalid file name")?;
+
+    let json_filename = format!("{}.json", file_stem.to_string_lossy());
+    let json_path = parent.join(json_filename);
+
+    fs::write(&json_path, json_content).map_err(|e| format!("Failed to write labels: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn load_video_labels(video_path: String) -> Result<Option<String>, String> {
+    let video_path = PathBuf::from(video_path);
+    let parent = video_path.parent().ok_or("Invalid video path")?;
+    let file_stem = video_path.file_stem().ok_or("Invalid file name")?;
+
+    let json_filename = format!("{}.json", file_stem.to_string_lossy());
+    let json_path = parent.join(json_filename);
+
+    if json_path.exists() {
+        let content =
+            fs::read_to_string(&json_path).map_err(|e| format!("Failed to read labels: {}", e))?;
+        Ok(Some(content))
+    } else {
+        Ok(None)
+    }
 }
