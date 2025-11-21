@@ -1,12 +1,12 @@
 import { createSignal, For, Show, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import "./App.css";
 
 function App() {
   const [videos, setVideos] = createSignal<string[]>([]);
   const [currentVideo, setCurrentVideo] = createSignal<string | null>(null);
+  const [videoSrc, setVideoSrc] = createSignal<string | null>(null);
 
   // Load saved folder on mount
   onMount(async () => {
@@ -22,6 +22,7 @@ function App() {
       const videoPaths = await invoke<string[]>("scan_videos", { path });
       setVideos(videoPaths);
       setCurrentVideo(null);
+      setVideoSrc(null);
       localStorage.setItem("lastFolder", path);
     } catch (error) {
       console.error("Error scanning videos:", error);
@@ -45,6 +46,22 @@ function App() {
     }
   }
 
+  async function handleVideoSelect(videoPath: string) {
+    setCurrentVideo(videoPath);
+
+    console.log("Selected video:", videoPath);
+
+    try {
+      // Register video with HTTP server
+      const url = await invoke<string>("register_video", { path: videoPath });
+      console.log("Video URL:", url);
+      setVideoSrc(url);
+    } catch (error) {
+      console.error("Failed to register video:", error);
+    }
+  }
+
+
   return (
     <div class="h-screen w-screen bg-base-200 p-4">
       <div class="grid grid-cols-12 gap-4 h-full">
@@ -63,7 +80,7 @@ function App() {
                   <li>
                     <a
                       class={currentVideo() === video ? "active" : ""}
-                      onClick={() => setCurrentVideo(video)}
+                      onClick={() => handleVideoSelect(video)}
                     >
                       {video.split(/[/\\]/).pop()}
                     </a>
@@ -78,20 +95,28 @@ function App() {
         <div class="col-span-6 bg-base-100 rounded-box shadow-lg flex flex-col items-center justify-center p-4">
           <Show when={currentVideo()} fallback={<div class="text-base-content/50">Select a video to preview</div>}>
             <div class="w-full h-full flex flex-col items-center justify-center">
-              {(() => {
-                const src = convertFileSrc(currentVideo()!);
-                console.log("Video source:", src);
-                return (
-                  <video
-                    controls
-                    src={src}
-                    class="max-w-full max-h-[80vh] rounded-lg shadow-md"
-                  />
-                );
-              })()}
-              <div class="mt-4 text-lg font-semibold">
-                {currentVideo()?.split(/[/\\]/).pop()}
-              </div>
+              <Show when={videoSrc()}>
+                <video
+                  controls
+                  src={videoSrc()!}
+                  class="max-w-full max-h-[80vh] rounded-lg shadow-md"
+                  preload="metadata"
+                  onLoadStart={() => console.log("✓ Video load started")}
+                  onLoadedMetadata={() => console.log("✓ Video metadata loaded")}
+                  onCanPlay={() => console.log("✓ Video ready to play")}
+                  onError={(e) => {
+                    console.error("✗ Video error:", e);
+                    console.error("✗ Error details:", e.currentTarget.error);
+                    console.error("✗ Error code:", e.currentTarget.error?.code);
+                    console.error("✗ Error message:", e.currentTarget.error?.message);
+                  }}
+                />
+                <div class="mt-4 text-center">
+                  <div class="text-lg font-semibold">
+                    {currentVideo()?.split(/[/\\]/).pop()}
+                  </div>
+                </div>
+              </Show>
             </div>
           </Show>
         </div>

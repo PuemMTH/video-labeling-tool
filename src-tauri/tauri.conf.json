@@ -12,13 +12,19 @@
   "app": {
     "windows": [
       {
-        "title": "video-labeling",
-        "width": 800,
-        "height": 600
+        "title": "Video Labeling Tool",
+        "width": 1400,
+        "height": 900,
+        "resizable": true,
+        "fullscreen": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: https://asset.localhost blob: data:; media-src * asset: https://asset.localhost blob: data: filesystem:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval';"
+      "csp": "default-src 'self' asset: https://asset.localhost file:; img-src 'self' asset: https://asset.localhost file: blob: data:; media-src * asset: https://asset.localhost file: blob: data: filesystem:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval';",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$HOME/**", "**"]
+      }
     }
   },
   "bundle": {
