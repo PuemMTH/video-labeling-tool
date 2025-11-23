@@ -236,7 +236,7 @@ function App() {
         <div class="col-span-6 bg-base-100 rounded-box shadow-lg flex flex-col p-4">
           <Show when={currentVideo()} fallback={<div class="flex items-center justify-center h-full text-base-content/50">Select a video to preview</div>}>
             <Show when={videoSrc()}>
-              <div class="flex flex-col h-full gap-2">
+              <div class="flex flex-col w-full gap-2">
                 <video
                   ref={videoRef}
                   controls

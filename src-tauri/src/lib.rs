@@ -221,9 +221,14 @@ async fn serve_video(
     let registry = registry.lock().unwrap();
     let path = match registry.get(&id) {
         Some(p) => p.clone(),
-        None => return (StatusCode::NOT_FOUND, "Video not found").into_response(),
+        None => {
+            println!("Video not found in registry: {}", id);
+            return (StatusCode::NOT_FOUND, "Video not found").into_response();
+        }
     };
     drop(registry);
+
+    println!("Serving video: {:?}", path);
 
     // Get file size
     let metadata = match fs::metadata(&path) {
@@ -326,9 +331,13 @@ async fn start_video_server(registry: VideoRegistry) {
         .layer(CorsLayer::permissive())
         .with_state(registry);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3030")
-        .await
-        .unwrap();
+    let listener = match tokio::net::TcpListener::bind("127.0.0.1:3030").await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("Failed to bind to port 3030: {}", e);
+            return;
+        }
+    };
 
     println!("Video server listening on http://127.0.0.1:3030");
 
@@ -415,6 +424,7 @@ fn get_video_metadata(path: String) -> Result<VideoMetadata, String> {
     }
 
     let output_str = String::from_utf8_lossy(&output.stdout);
+    println!("ffprobe output for {}: {}", path, output_str);
     let json: serde_json::Value =
         serde_json::from_str(&output_str).map_err(|e| format!("Failed to parse JSON: {}", e))?;
 

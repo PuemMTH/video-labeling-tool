@@ -74,3 +74,15 @@ To build the application for production, follow the instructions for your operat
 -   `src/`: Frontend source code (SolidJS).
 -   `src-tauri/`: Backend source code (Rust).
 -   `src-tauri/capabilities/`: Tauri permission configurations.
+
+## Troubleshooting
+
+### Linux: Missing GStreamer Plugins
+
+If you encounter errors related to missing GStreamer plugins (e.g., `The GStreamer FDK AAC plugin is missing` or `WebKit wasn't able to find a WebVTT encoder`), you need to install the `gst-plugins-bad` and other related packages.
+
+On Ubuntu/Debian:
+
+```bash
+sudo apt-get install gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav
+```
