@@ -5,6 +5,7 @@ use axum::{
     routing::get,
     Router,
 };
+use nvml_wrapper::Nvml;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
@@ -134,11 +135,21 @@ fn start_progressive_transcode(
             .map(|s| s.success())
             .unwrap_or(false);
 
-        let mut args = vec!["-i".to_string(), video_path_clone];
+        let mut args = vec![];
 
         if use_gpu {
             println!("Using GPU (h264_nvenc) for transcoding");
+            // Enable hardware decoding if using GPU
             args.extend_from_slice(&[
+                "-hwaccel".to_string(),
+                "cuda".to_string(),
+                "-hwaccel_output_format".to_string(),
+                "cuda".to_string(),
+            ]);
+
+            args.extend_from_slice(&[
+                "-i".to_string(),
+                video_path_clone,
                 "-c:v".to_string(),
                 "h264_nvenc".to_string(),
                 "-preset".to_string(),
@@ -151,6 +162,8 @@ fn start_progressive_transcode(
         } else {
             println!("Using CPU (libx264) for transcoding");
             args.extend_from_slice(&[
+                "-i".to_string(),
+                video_path_clone,
                 "-c:v".to_string(),
                 "libx264".to_string(),
                 "-preset".to_string(),
@@ -404,9 +417,14 @@ pub fn run() {
     let video_registry: VideoRegistry = Arc::new(Mutex::new(HashMap::new()));
     let registry_clone = video_registry.clone();
 
+    let nvml = Nvml::init().ok();
+
     tauri::Builder::default()
         .manage(video_registry)
-        .manage(AppMonitorState(Mutex::new(System::new_all())))
+        .manage(AppMonitorState {
+            system: Mutex::new(System::new_all()),
+            nvml: Mutex::new(nvml),
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -422,7 +440,10 @@ pub fn run() {
             get_video_metadata,
             save_video_labels,
             load_video_labels,
-            get_app_stats
+            save_video_labels,
+            load_video_labels,
+            get_app_stats,
+            get_label_summary
         ])
         .setup(|_app| {
             // Start video server after Tauri runtime is ready
@@ -535,7 +556,10 @@ async fn load_video_labels(video_path: String) -> Result<Option<String>, String>
     }
 }
 
-struct AppMonitorState(Mutex<System>);
+struct AppMonitorState {
+    system: Mutex<System>,
+    nvml: Mutex<Option<Nvml>>,
+}
 
 #[derive(serde::Serialize)]
 struct AppStats {
@@ -547,7 +571,7 @@ struct AppStats {
 
 #[tauri::command]
 fn get_app_stats(state: tauri::State<AppMonitorState>) -> AppStats {
-    let mut sys = state.0.lock().unwrap();
+    let mut sys = state.system.lock().unwrap();
     sys.refresh_cpu();
     sys.refresh_memory();
     sys.refresh_processes();
@@ -563,18 +587,16 @@ fn get_app_stats(state: tauri::State<AppMonitorState>) -> AppStats {
         }
     }
 
-    let gpu_usage = Command::new("nvidia-smi")
-        .args([
-            "--query-gpu=utilization.gpu",
-            "--format=csv,noheader,nounits",
-        ])
-        .output()
-        .ok()
-        .and_then(|output| {
-            let output_str = String::from_utf8_lossy(&output.stdout);
-            output_str.trim().parse::<f32>().ok()
-        })
-        .unwrap_or(0.0);
+    let mut gpu_usage = 0.0;
+    if let Ok(nvml) = state.nvml.lock() {
+        if let Some(nvml) = nvml.as_ref() {
+            if let Ok(device) = nvml.device_by_index(0) {
+                if let Ok(util) = device.utilization_rates() {
+                    gpu_usage = util.gpu as f32;
+                }
+            }
+        }
+    }
 
     AppStats {
         cpu_usage: cpu,
@@ -582,4 +604,90 @@ fn get_app_stats(state: tauri::State<AppMonitorState>) -> AppStats {
         total_memory: sys.total_memory(),
         gpu_usage,
     }
+}
+
+#[derive(serde::Serialize)]
+struct GlobalEvent {
+    video_name: String,
+    label: String,
+    start_frame: usize,
+    end_frame: usize,
+    fps: f64,
+}
+
+#[derive(serde::Serialize)]
+struct LabelSummary {
+    total_videos: usize,
+    total_labeled_videos: usize,
+    total_events: usize,
+    events: Vec<GlobalEvent>,
+}
+
+#[tauri::command]
+fn get_label_summary(path: String) -> LabelSummary {
+    let mut summary = LabelSummary {
+        total_videos: 0,
+        total_labeled_videos: 0,
+        total_events: 0,
+        events: Vec::new(),
+    };
+
+    if let Ok(entries) = std::fs::read_dir(path) {
+        for entry in entries {
+            if let Ok(entry) = entry {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(extension) = path.extension() {
+                        let ext = extension.to_string_lossy().to_lowercase();
+                        if ["mp4", "webm", "mkv", "avi", "mov", "flv", "wmv", "m4v"]
+                            .contains(&ext.as_str())
+                        {
+                            summary.total_videos += 1;
+
+                            let file_stem = path.file_stem().unwrap_or_default();
+                            let json_path = path
+                                .with_file_name(format!("{}.json", file_stem.to_string_lossy()));
+
+                            if json_path.exists() {
+                                if let Ok(content) = std::fs::read_to_string(&json_path) {
+                                    if let Ok(json) =
+                                        serde_json::from_str::<serde_json::Value>(&content)
+                                    {
+                                        let fps = json["fps"].as_f64().unwrap_or(30.0);
+                                        if let Some(events) = json["events"].as_array() {
+                                            if !events.is_empty() {
+                                                summary.total_labeled_videos += 1;
+                                            }
+                                            for event in events {
+                                                summary.total_events += 1;
+                                                summary.events.push(GlobalEvent {
+                                                    video_name: file_stem
+                                                        .to_string_lossy()
+                                                        .to_string(),
+                                                    label: event["label"]
+                                                        .as_str()
+                                                        .unwrap_or("unknown")
+                                                        .to_string(),
+                                                    start_frame: event["start_frame"]
+                                                        .as_u64()
+                                                        .unwrap_or(0)
+                                                        as usize,
+                                                    end_frame: event["end_frame"]
+                                                        .as_u64()
+                                                        .unwrap_or(0)
+                                                        as usize,
+                                                    fps,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    summary
 }
