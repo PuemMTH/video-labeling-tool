@@ -112,29 +112,71 @@ fn start_progressive_transcode(
     let video_path_clone = video_path.clone();
 
     thread::spawn(move || {
-        let _ = Command::new("ffmpeg")
+        // Check for GPU support (NVENC)
+        let use_gpu = Command::new("ffmpeg")
             .args([
-                "-i",
-                &video_path_clone,
-                "-c:v",
-                "libx264",
-                "-preset",
-                "ultrafast", // Ultra fast for streaming
-                "-tune",
-                "zerolatency", // Optimize for low latency
-                "-crf",
-                "28", // Slightly lower quality for speed
-                "-c:a",
-                "aac",
-                "-b:a",
-                "128k",
-                "-movflags",
-                "+frag_keyframe+empty_moov+default_base_moof", // Progressive streaming
+                "-v",
+                "error",
                 "-f",
-                "mp4",
-                "-y",
-                output_path_clone.to_string_lossy().as_ref(),
+                "lavfi",
+                "-i",
+                "color=black:s=64x64:r=1",
+                "-vframes",
+                "1",
+                "-an",
+                "-c:v",
+                "h264_nvenc",
+                "-f",
+                "null",
+                "-",
             ])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        let mut args = vec!["-i".to_string(), video_path_clone];
+
+        if use_gpu {
+            println!("Using GPU (h264_nvenc) for transcoding");
+            args.extend_from_slice(&[
+                "-c:v".to_string(),
+                "h264_nvenc".to_string(),
+                "-preset".to_string(),
+                "p1".to_string(), // Fastest
+                "-rc".to_string(),
+                "constqp".to_string(),
+                "-qp".to_string(),
+                "28".to_string(),
+            ]);
+        } else {
+            println!("Using CPU (libx264) for transcoding");
+            args.extend_from_slice(&[
+                "-c:v".to_string(),
+                "libx264".to_string(),
+                "-preset".to_string(),
+                "ultrafast".to_string(),
+                "-tune".to_string(),
+                "zerolatency".to_string(),
+                "-crf".to_string(),
+                "28".to_string(),
+            ]);
+        }
+
+        args.extend_from_slice(&[
+            "-c:a".to_string(),
+            "aac".to_string(),
+            "-b:a".to_string(),
+            "128k".to_string(),
+            "-movflags".to_string(),
+            "+frag_keyframe+empty_moov+default_base_moof".to_string(),
+            "-f".to_string(),
+            "mp4".to_string(),
+            "-y".to_string(),
+            output_path_clone.to_string_lossy().to_string(),
+        ]);
+
+        let _ = Command::new("ffmpeg")
+            .args(&args)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
@@ -500,6 +542,7 @@ struct AppStats {
     cpu_usage: f32,
     memory_usage: u64,
     total_memory: u64,
+    gpu_usage: f32,
 }
 
 #[tauri::command]
@@ -520,9 +563,23 @@ fn get_app_stats(state: tauri::State<AppMonitorState>) -> AppStats {
         }
     }
 
+    let gpu_usage = Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=utilization.gpu",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+        .ok()
+        .and_then(|output| {
+            let output_str = String::from_utf8_lossy(&output.stdout);
+            output_str.trim().parse::<f32>().ok()
+        })
+        .unwrap_or(0.0);
+
     AppStats {
         cpu_usage: cpu,
         memory_usage: mem,
         total_memory: sys.total_memory(),
+        gpu_usage,
     }
 }

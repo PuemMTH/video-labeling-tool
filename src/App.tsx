@@ -24,6 +24,7 @@ interface AppStats {
   cpu_usage: number;
   memory_usage: number;
   total_memory: number;
+  gpu_usage: number;
 }
 
 function App() {
@@ -245,6 +246,12 @@ function App() {
             <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
           </svg>
           Video Labeler
+          <Show when={currentVideo()}>
+            <span class="text-base-content/30 mx-2">|</span>
+            <span class="text-base font-normal text-base-content/80">
+              {currentVideo()?.path.split(/[/\\]/).pop()}
+            </span>
+          </Show>
         </div>
         <div class="flex gap-6 text-xs font-mono bg-base-200 px-3 py-1 rounded-full opacity-80">
           <div class="flex items-center gap-2" title="UI Frames Per Second">
@@ -258,6 +265,10 @@ function App() {
           <div class="flex items-center gap-2" title="CPU Usage">
             <span class="font-bold text-accent">CPU:</span>
             <span>{appStats()?.cpu_usage.toFixed(1) || "0.0"}%</span>
+          </div>
+          <div class="flex items-center gap-2" title="GPU Usage">
+            <span class="font-bold text-warning">GPU:</span>
+            <span>{appStats()?.gpu_usage.toFixed(0) || "0"}%</span>
           </div>
           <div class="flex items-center gap-2" title="Memory Usage">
             <span class="font-bold text-info">RAM:</span>
@@ -282,7 +293,7 @@ function App() {
                   {(video) => (
                     <li>
                       <a
-                        class={`flex justify-between items-center ${currentVideo()?.path === video.path ? "active" : ""}`}
+                        class={`flex justify-between items-center ${currentVideo()?.path === video.path ? "bg-base-300 font-bold" : ""}`}
                         onClick={() => handleVideoSelect(video)}
                       >
                         <span>{video.path.split(/[/\\]/).pop()}</span>
@@ -341,13 +352,32 @@ function App() {
                   {/* Timeline Bar */}
                   <Show when={totalFrames() > 0}>
                     <div class="w-full h-4 bg-base-300 rounded-full mt-2 relative overflow-hidden cursor-pointer"
-                      onClick={(e) => {
-                        if (videoRef && fps() > 0) {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          const x = e.clientX - rect.left;
-                          const percentage = x / rect.width;
-                          videoRef.currentTime = percentage * duration();
-                        }
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        const timeline = e.currentTarget;
+                        const rect = timeline.getBoundingClientRect();
+
+                        const updateTime = (clientX: number) => {
+                          if (videoRef && duration() > 0) {
+                            const x = clientX - rect.left;
+                            const percentage = Math.max(0, Math.min(1, x / rect.width));
+                            videoRef.currentTime = percentage * duration();
+                          }
+                        };
+
+                        updateTime(e.clientX);
+
+                        const onMove = (moveEvent: PointerEvent) => {
+                          updateTime(moveEvent.clientX);
+                        };
+
+                        const onUp = () => {
+                          window.removeEventListener('pointermove', onMove);
+                          window.removeEventListener('pointerup', onUp);
+                        };
+
+                        window.addEventListener('pointermove', onMove);
+                        window.addEventListener('pointerup', onUp);
                       }}
                     >
                       {/* Current Progress */}
@@ -445,9 +475,6 @@ function App() {
                     </For>
                   </tbody>
                 </table>
-              </div>
-              <div class="mt-4">
-                <button class="btn btn-outline btn-sm w-full">Add Annotation</button>
               </div>
             </div>
           </div>
