@@ -12,7 +12,9 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use sysinfo::System;
 use tauri::Manager;
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tower_http::cors::CorsLayer;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -218,20 +220,21 @@ async fn serve_video(
     Path(id): Path<String>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    let registry = registry.lock().unwrap();
-    let path = match registry.get(&id) {
-        Some(p) => p.clone(),
-        None => {
-            println!("Video not found in registry: {}", id);
-            return (StatusCode::NOT_FOUND, "Video not found").into_response();
+    let path = {
+        let registry = registry.lock().unwrap();
+        match registry.get(&id) {
+            Some(p) => p.clone(),
+            None => {
+                println!("Video not found in registry: {}", id);
+                return (StatusCode::NOT_FOUND, "Video not found").into_response();
+            }
         }
     };
-    drop(registry);
 
     println!("Serving video: {:?}", path);
 
     // Get file size
-    let metadata = match fs::metadata(&path) {
+    let metadata = match tokio::fs::metadata(&path).await {
         Ok(m) => m,
         Err(_) => return (StatusCode::NOT_FOUND, "File not found").into_response(),
     };
@@ -266,7 +269,7 @@ async fn serve_video(
                 };
 
                 // Read chunk
-                let mut file = match fs::File::open(&path) {
+                let mut file = match tokio::fs::File::open(&path).await {
                     Ok(f) => f,
                     Err(_) => {
                         return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to open file")
@@ -274,54 +277,49 @@ async fn serve_video(
                     }
                 };
 
-                use std::io::{Read, Seek, SeekFrom};
-                if file.seek(SeekFrom::Start(start)).is_err() {
+                if file.seek(std::io::SeekFrom::Start(start)).await.is_err() {
                     return (StatusCode::INTERNAL_SERVER_ERROR, "Seek failed").into_response();
                 }
 
                 let chunk_size = (end - start + 1) as usize;
                 let mut buffer = vec![0u8; chunk_size];
-                if file.read_exact(&mut buffer).is_err() {
+                if file.read_exact(&mut buffer).await.is_err() {
                     return (StatusCode::INTERNAL_SERVER_ERROR, "Read failed").into_response();
                 }
 
-                return (
-                    StatusCode::PARTIAL_CONTENT,
-                    [
-                        (header::CONTENT_TYPE, content_type),
-                        (header::CONTENT_LENGTH, &chunk_size.to_string()),
-                        (
-                            header::CONTENT_RANGE,
-                            &format!("bytes {}-{}/{}", start, end, file_size),
-                        ),
-                        (header::ACCEPT_RANGES, "bytes"),
-                        (header::CACHE_CONTROL, "public, max-age=31536000"),
-                    ],
-                    buffer,
-                )
+                return axum::response::Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(header::CONTENT_TYPE, content_type)
+                    .header(header::CONTENT_LENGTH, chunk_size.to_string())
+                    .header(
+                        header::CONTENT_RANGE,
+                        format!("bytes {}-{}/{}", start, end, file_size),
+                    )
+                    .header(header::ACCEPT_RANGES, "bytes")
+                    .header(header::CACHE_CONTROL, "public, max-age=31536000")
+                    .body(axum::body::Body::from(buffer))
+                    .unwrap()
                     .into_response();
             }
         }
     }
 
     // No range request - send full file
-    let file = match fs::read(&path) {
+    let file = match tokio::fs::read(&path).await {
         Ok(data) => data,
         Err(_) => {
             return (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read file").into_response()
         }
     };
 
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, content_type),
-            (header::CONTENT_LENGTH, &file_size.to_string()),
-            (header::ACCEPT_RANGES, "bytes"),
-            (header::CACHE_CONTROL, "public, max-age=31536000"),
-        ],
-        file,
-    )
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CONTENT_LENGTH, file_size.to_string())
+        .header(header::ACCEPT_RANGES, "bytes")
+        .header(header::CACHE_CONTROL, "public, max-age=31536000")
+        .body(axum::body::Body::from(file))
+        .unwrap()
         .into_response()
 }
 
@@ -366,6 +364,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(video_registry)
+        .manage(AppMonitorState(Mutex::new(System::new_all())))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -380,7 +379,8 @@ pub fn run() {
             register_video,
             get_video_metadata,
             save_video_labels,
-            load_video_labels
+            load_video_labels,
+            get_app_stats
         ])
         .setup(|_app| {
             // Start video server after Tauri runtime is ready
@@ -460,7 +460,7 @@ fn get_video_metadata(path: String) -> Result<VideoMetadata, String> {
 }
 
 #[tauri::command]
-fn save_video_labels(video_path: String, json_content: String) -> Result<(), String> {
+async fn save_video_labels(video_path: String, json_content: String) -> Result<(), String> {
     let video_path = PathBuf::from(video_path);
     let parent = video_path.parent().ok_or("Invalid video path")?;
     let file_stem = video_path.file_stem().ok_or("Invalid file name")?;
@@ -468,12 +468,14 @@ fn save_video_labels(video_path: String, json_content: String) -> Result<(), Str
     let json_filename = format!("{}.json", file_stem.to_string_lossy());
     let json_path = parent.join(json_filename);
 
-    fs::write(&json_path, json_content).map_err(|e| format!("Failed to write labels: {}", e))?;
+    tokio::fs::write(&json_path, json_content)
+        .await
+        .map_err(|e| format!("Failed to write labels: {}", e))?;
     Ok(())
 }
 
 #[tauri::command]
-fn load_video_labels(video_path: String) -> Result<Option<String>, String> {
+async fn load_video_labels(video_path: String) -> Result<Option<String>, String> {
     let video_path = PathBuf::from(video_path);
     let parent = video_path.parent().ok_or("Invalid video path")?;
     let file_stem = video_path.file_stem().ok_or("Invalid file name")?;
@@ -482,10 +484,45 @@ fn load_video_labels(video_path: String) -> Result<Option<String>, String> {
     let json_path = parent.join(json_filename);
 
     if json_path.exists() {
-        let content =
-            fs::read_to_string(&json_path).map_err(|e| format!("Failed to read labels: {}", e))?;
+        let content = tokio::fs::read_to_string(&json_path)
+            .await
+            .map_err(|e| format!("Failed to read labels: {}", e))?;
         Ok(Some(content))
     } else {
         Ok(None)
+    }
+}
+
+struct AppMonitorState(Mutex<System>);
+
+#[derive(serde::Serialize)]
+struct AppStats {
+    cpu_usage: f32,
+    memory_usage: u64,
+    total_memory: u64,
+}
+
+#[tauri::command]
+fn get_app_stats(state: tauri::State<AppMonitorState>) -> AppStats {
+    let mut sys = state.0.lock().unwrap();
+    sys.refresh_cpu();
+    sys.refresh_memory();
+    sys.refresh_processes();
+
+    let pid = sysinfo::get_current_pid().ok();
+    let mut cpu = 0.0;
+    let mut mem = 0;
+
+    if let Some(pid) = pid {
+        if let Some(process) = sys.process(pid) {
+            cpu = process.cpu_usage();
+            mem = process.memory();
+        }
+    }
+
+    AppStats {
+        cpu_usage: cpu,
+        memory_usage: mem,
+        total_memory: sys.total_memory(),
     }
 }

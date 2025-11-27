@@ -20,6 +20,12 @@ interface LabelEvent {
   before_start_frame: number;
 }
 
+interface AppStats {
+  cpu_usage: number;
+  memory_usage: number;
+  total_memory: number;
+}
+
 function App() {
   const [videos, setVideos] = createSignal<VideoEntry[]>([]);
   const [currentVideo, setCurrentVideo] = createSignal<VideoEntry | null>(null);
@@ -31,6 +37,8 @@ function App() {
   const [currentFrame, setCurrentFrame] = createSignal<number>(0);
   const [duration, setDuration] = createSignal<number>(0);
   const [totalFrames, setTotalFrames] = createSignal<number>(0);
+  const [appStats, setAppStats] = createSignal<AppStats | null>(null);
+  const [uiFps, setUiFps] = createSignal<number>(0);
   let videoRef: HTMLVideoElement | undefined;
 
   // Load saved folder on mount
@@ -78,16 +86,14 @@ function App() {
             const newEvents = [...events(), newEvent];
             setEvents(newEvents);
 
-            // Save to file
-            await saveLabels(currentVideo()!.path, newEvents, fps());
-
-            // Update video list count
+            // Optimistic update
             setVideos(videos().map(v =>
               v.path === currentVideo()!.path ? { ...v, event_count: v.event_count + 1 } : v
             ));
-
-            // Update current video state
             setCurrentVideo({ ...currentVideo()!, event_count: currentVideo()!.event_count + 1 });
+
+            // Save to file in background
+            saveLabels(currentVideo()!.path, newEvents, fps()).catch(console.error);
           }
           setStartFrame(null);
         }
@@ -96,8 +102,37 @@ function App() {
 
     window.addEventListener("keydown", handleKeyPress);
 
+    // Polling for stats
+    const statsInterval = setInterval(async () => {
+      try {
+        const stats = await invoke<AppStats>("get_app_stats");
+        setAppStats(stats);
+      } catch (e) {
+        console.error("Failed to get stats:", e);
+      }
+    }, 1000);
+
+    // UI FPS Counter
+    let frames = 0;
+    let lastTime = performance.now();
+    let animationFrameId: number;
+
+    const loop = () => {
+      frames++;
+      const now = performance.now();
+      if (now - lastTime >= 1000) {
+        setUiFps(frames);
+        frames = 0;
+        lastTime = now;
+      }
+      animationFrameId = requestAnimationFrame(loop);
+    };
+    animationFrameId = requestAnimationFrame(loop);
+
     onCleanup(() => {
       window.removeEventListener("keydown", handleKeyPress);
+      clearInterval(statsInterval);
+      cancelAnimationFrame(animationFrameId);
     });
   });
 
@@ -191,198 +226,229 @@ function App() {
     newEvents.splice(index, 1);
     setEvents(newEvents);
 
-    await saveLabels(currentVideo()!.path, newEvents, fps());
-
-    // Update video list count
+    // Optimistic update
     setVideos(videos().map(v =>
       v.path === currentVideo()!.path ? { ...v, event_count: Math.max(0, v.event_count - 1) } : v
     ));
     setCurrentVideo({ ...currentVideo()!, event_count: Math.max(0, currentVideo()!.event_count - 1) });
+
+    // Save in background
+    saveLabels(currentVideo()!.path, newEvents, fps()).catch(console.error);
   }
 
   return (
-    <div class="h-screen w-screen bg-base-200 p-4">
-      <div class="grid grid-cols-12 gap-4 h-full">
-        {/* Column 1: File List */}
-        <div class="col-span-3 bg-base-100 rounded-box shadow-lg flex flex-col overflow-hidden">
-          <div class="p-4 border-b border-base-300">
-            <button class="btn btn-primary w-full" onClick={handleOpenFolder}>
-              Open Folder
-            </button>
+    <div class="h-screen w-screen bg-base-200 flex flex-col">
+      {/* Top Bar */}
+      <div class="bg-base-100 shadow-sm px-4 py-2 flex justify-between items-center z-10 border-b border-base-300">
+        <div class="font-bold text-lg flex items-center gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-primary">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />
+          </svg>
+          Video Labeler
+        </div>
+        <div class="flex gap-6 text-xs font-mono bg-base-200 px-3 py-1 rounded-full opacity-80">
+          <div class="flex items-center gap-2" title="UI Frames Per Second">
+            <span class="font-bold text-primary">UI FPS:</span>
+            <span>{uiFps()}</span>
           </div>
-          <div class="flex-1 overflow-y-auto p-2">
-            <ul class="menu bg-base-100 w-full rounded-box">
-              <li class="menu-title">Videos ({videos().length})</li>
-              <For each={videos()}>
-                {(video) => (
-                  <li>
-                    <a
-                      class={`flex justify-between items-center ${currentVideo()?.path === video.path ? "active" : ""}`}
-                      onClick={() => handleVideoSelect(video)}
-                    >
-                      <span>{video.path.split(/[/\\]/).pop()}</span>
-                      <Show when={video.event_count > 0}>
-                        <div class="badge badge-sm badge-success">{video.event_count}</div>
-                      </Show>
-                    </a>
-                  </li>
-                )}
-              </For>
-            </ul>
+          <div class="flex items-center gap-2" title="Video Frames Per Second">
+            <span class="font-bold text-secondary">Video FPS:</span>
+            <span>{fps() || 0}</span>
+          </div>
+          <div class="flex items-center gap-2" title="CPU Usage">
+            <span class="font-bold text-accent">CPU:</span>
+            <span>{appStats()?.cpu_usage.toFixed(1) || "0.0"}%</span>
+          </div>
+          <div class="flex items-center gap-2" title="Memory Usage">
+            <span class="font-bold text-info">RAM:</span>
+            <span>{appStats() ? (appStats()!.memory_usage / 1024 / 1024).toFixed(0) : "0"} MB</span>
           </div>
         </div>
+      </div>
 
-        {/* Column 2: Video Player */}
-        <div class="col-span-6 bg-base-100 rounded-box shadow-lg flex flex-col p-4">
-          <Show when={currentVideo()} fallback={<div class="flex items-center justify-center h-full text-base-content/50">Select a video to preview</div>}>
-            <Show when={videoSrc()}>
-              <div class="flex flex-col w-full gap-2">
-                <video
-                  ref={videoRef}
-                  controls
-                  src={videoSrc()!}
-                  class="w-full h-full object-contain rounded-lg"
-                  preload="metadata"
-                  onTimeUpdate={() => {
-                    if (videoRef && fps() > 0) {
-                      setCurrentFrame(Math.round(videoRef.currentTime * fps()));
-                    }
-                  }}
-                  onLoadStart={() => console.log("✓ Video load started")}
-                  onLoadedMetadata={() => console.log("✓ Video metadata loaded")}
-                  onCanPlay={() => console.log("✓ Video ready to play")}
-                  onError={(e) => {
-                    console.error("✗ Video error:", e);
-                    console.error("✗ Error details:", e.currentTarget.error);
-                    console.error("✗ Error code:", e.currentTarget.error?.code);
-                    console.error("✗ Error message:", e.currentTarget.error?.message);
-                  }}
-                />
-                <div class="text-center py-2">
-                  <div class="text-lg font-semibold">
-                    {currentVideo()?.path.split(/[/\\]/).pop()}
-                  </div>
-                  <Show when={isRecording()}>
-                    <div class="text-error font-bold animate-pulse">
-                      ● Recording Event... (Press 'w' to stop)
+      <div class="flex-1 p-4 overflow-hidden">
+        <div class="grid grid-cols-12 gap-4 h-full">
+          {/* Column 1: File List */}
+          <div class="col-span-3 bg-base-100 rounded-box shadow-lg flex flex-col overflow-hidden">
+            <div class="p-4 border-b border-base-300">
+              <button class="btn btn-primary w-full" onClick={handleOpenFolder}>
+                Open Folder
+              </button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-2">
+              <ul class="menu bg-base-100 w-full rounded-box">
+                <li class="menu-title">Videos ({videos().length})</li>
+                <For each={videos()}>
+                  {(video) => (
+                    <li>
+                      <a
+                        class={`flex justify-between items-center ${currentVideo()?.path === video.path ? "active" : ""}`}
+                        onClick={() => handleVideoSelect(video)}
+                      >
+                        <span>{video.path.split(/[/\\]/).pop()}</span>
+                        <Show when={video.event_count > 0}>
+                          <div class="badge badge-sm badge-success">{video.event_count}</div>
+                        </Show>
+                      </a>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </div>
+          </div>
+
+          {/* Column 2: Video Player */}
+          <div class="col-span-6 bg-base-100 rounded-box shadow-lg flex flex-col p-4">
+            <Show when={currentVideo()} fallback={<div class="flex items-center justify-center h-full text-base-content/50">Select a video to preview</div>}>
+              <Show when={videoSrc()}>
+                <div class="flex flex-col w-full gap-2">
+                  <video
+                    ref={videoRef}
+                    controls
+                    src={videoSrc()!}
+                    class="w-full h-full object-contain rounded-lg"
+                    preload="metadata"
+                    onTimeUpdate={() => {
+                      if (videoRef && fps() > 0) {
+                        setCurrentFrame(Math.round(videoRef.currentTime * fps()));
+                      }
+                    }}
+                    onLoadStart={() => console.log("✓ Video load started")}
+                    onLoadedMetadata={() => console.log("✓ Video metadata loaded")}
+                    onCanPlay={() => console.log("✓ Video ready to play")}
+                    onError={(e) => {
+                      console.error("✗ Video error:", e);
+                      console.error("✗ Error details:", e.currentTarget.error);
+                      console.error("✗ Error code:", e.currentTarget.error?.code);
+                      console.error("✗ Error message:", e.currentTarget.error?.message);
+                    }}
+                  />
+                  <div class="text-center py-2">
+                    <div class="text-lg font-semibold">
+                      {currentVideo()?.path.split(/[/\\]/).pop()}
                     </div>
-                  </Show>
-                  <Show when={!isRecording() && fps() > 0}>
-                    <div class="text-sm text-base-content/70">
-                      Press 'w' to start marking an event
+                    <Show when={isRecording()}>
+                      <div class="text-error font-bold animate-pulse">
+                        ● Recording Event... (Press 'w' to stop)
+                      </div>
+                    </Show>
+                    <Show when={!isRecording() && fps() > 0}>
+                      <div class="text-sm text-base-content/70">
+                        Press 'w' to start marking an event
+                      </div>
+                    </Show>
+                  </div>
+                  {/* Timeline Bar */}
+                  <Show when={totalFrames() > 0}>
+                    <div class="w-full h-4 bg-base-300 rounded-full mt-2 relative overflow-hidden cursor-pointer"
+                      onClick={(e) => {
+                        if (videoRef && fps() > 0) {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          const x = e.clientX - rect.left;
+                          const percentage = x / rect.width;
+                          videoRef.currentTime = percentage * duration();
+                        }
+                      }}
+                    >
+                      {/* Current Progress */}
+                      <div
+                        class="absolute top-0 left-0 h-full bg-base-content/20 pointer-events-none"
+                        style={{ width: `${(currentFrame() / totalFrames()) * 100}%` }}
+                      ></div>
+
+                      {/* Events */}
+                      <For each={events()}>
+                        {(event) => {
+                          const startPercent = (event.start_frame / totalFrames()) * 100;
+                          const endPercent = (event.end_frame / totalFrames()) * 100;
+                          const beforeStartPercent = (event.before_start_frame / totalFrames()) * 100;
+
+                          return (
+                            <>
+                              {/* Warning Zone (Orange) */}
+                              <div
+                                class="absolute top-0 h-full bg-warning/70"
+                                style={{
+                                  left: `${beforeStartPercent}%`,
+                                  width: `${startPercent - beforeStartPercent}%`
+                                }}
+                                title={`Warning: ${event.label}`}
+                              ></div>
+                              {/* Active Zone (Red) */}
+                              <div
+                                class="absolute top-0 h-full bg-error/70"
+                                style={{
+                                  left: `${startPercent}%`,
+                                  width: `${endPercent - startPercent}%`
+                                }}
+                                title={`Event: ${event.label}`}
+                              ></div>
+                            </>
+                          );
+                        }}
+                      </For>
                     </div>
                   </Show>
                 </div>
-                {/* Timeline Bar */}
-                <Show when={totalFrames() > 0}>
-                  <div class="w-full h-4 bg-base-300 rounded-full mt-2 relative overflow-hidden cursor-pointer"
-                    onClick={(e) => {
-                      if (videoRef && fps() > 0) {
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        const x = e.clientX - rect.left;
-                        const percentage = x / rect.width;
-                        videoRef.currentTime = percentage * duration();
-                      }
-                    }}
-                  >
-                    {/* Current Progress */}
-                    <div
-                      class="absolute top-0 left-0 h-full bg-base-content/20 pointer-events-none"
-                      style={{ width: `${(currentFrame() / totalFrames()) * 100}%` }}
-                    ></div>
-
-                    {/* Events */}
-                    <For each={events()}>
-                      {(event) => {
-                        const startPercent = (event.start_frame / totalFrames()) * 100;
-                        const endPercent = (event.end_frame / totalFrames()) * 100;
-                        const beforeStartPercent = (event.before_start_frame / totalFrames()) * 100;
-
-                        return (
-                          <>
-                            {/* Warning Zone (Orange) */}
-                            <div
-                              class="absolute top-0 h-full bg-warning/70"
-                              style={{
-                                left: `${beforeStartPercent}%`,
-                                width: `${startPercent - beforeStartPercent}%`
-                              }}
-                              title={`Warning: ${event.label}`}
-                            ></div>
-                            {/* Active Zone (Red) */}
-                            <div
-                              class="absolute top-0 h-full bg-error/70"
-                              style={{
-                                left: `${startPercent}%`,
-                                width: `${endPercent - startPercent}%`
-                              }}
-                              title={`Event: ${event.label}`}
-                            ></div>
-                          </>
-                        );
-                      }}
-                    </For>
-                  </div>
-                </Show>
-              </div>
+              </Show>
             </Show>
-          </Show>
-        </div>
-
-        {/* Column 3: Annotations (Mockup) */}
-        <div class="col-span-3 bg-base-100 rounded-box shadow-lg flex flex-col overflow-hidden">
-          <div class="p-4 border-b border-base-300">
-            <h2 class="text-xl font-bold">Annotations</h2>
           </div>
-          <div class="flex-1 overflow-y-auto p-4">
-            <div class="overflow-x-auto">
-              <table class="table table-zebra w-full">
-                <thead>
-                  <tr>
-                    <th>Time</th>
-                    <th>Label</th>
-                    <th>Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <For each={events()}>
-                    {(event, index) => (
-                      <tr
-                        class={`hover cursor-pointer ${currentFrame() >= event.start_frame && currentFrame() <= event.end_frame
-                          ? "bg-error text-error-content"
-                          : currentFrame() >= event.before_start_frame && currentFrame() < event.start_frame
-                            ? "bg-warning text-warning-content"
-                            : ""
-                          }`}
-                        onClick={() => {
-                          if (videoRef) {
-                            videoRef.currentTime = event.start_frame / fps();
-                          }
-                        }}
-                      >
-                        <td>{event.start_frame} - {event.end_frame}</td>
-                        <td>{event.label}</td>
-                        <td>
-                          <button
-                            class="btn btn-ghost btn-xs text-error"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDeleteEvent(index());
-                            }}
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
-                              <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                            </svg>
-                          </button>
-                        </td>
-                      </tr>
-                    )}
-                  </For>
-                </tbody>
-              </table>
+
+          {/* Column 3: Annotations (Mockup) */}
+          <div class="col-span-3 bg-base-100 rounded-box shadow-lg flex flex-col overflow-hidden">
+            <div class="p-4 border-b border-base-300">
+              <h2 class="text-xl font-bold">Annotations</h2>
             </div>
-            <div class="mt-4">
-              <button class="btn btn-outline btn-sm w-full">Add Annotation</button>
+            <div class="flex-1 overflow-y-auto p-4">
+              <div class="overflow-x-auto">
+                <table class="table table-zebra w-full">
+                  <thead>
+                    <tr>
+                      <th>Time</th>
+                      <th>Label</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <For each={events()}>
+                      {(event, index) => (
+                        <tr
+                          class={`hover cursor-pointer ${currentFrame() >= event.start_frame && currentFrame() <= event.end_frame
+                            ? "bg-error text-error-content"
+                            : currentFrame() >= event.before_start_frame && currentFrame() < event.start_frame
+                              ? "bg-warning text-warning-content"
+                              : ""
+                            }`}
+                          onClick={() => {
+                            if (videoRef) {
+                              videoRef.currentTime = event.start_frame / fps();
+                            }
+                          }}
+                        >
+                          <td>{event.start_frame} - {event.end_frame}</td>
+                          <td>{event.label}</td>
+                          <td>
+                            <button
+                              class="btn btn-ghost btn-xs text-error"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDeleteEvent(index());
+                              }}
+                            >
+                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                              </svg>
+                            </button>
+                          </td>
+                        </tr>
+                      )}
+                    </For>
+                  </tbody>
+                </table>
+              </div>
+              <div class="mt-4">
+                <button class="btn btn-outline btn-sm w-full">Add Annotation</button>
+              </div>
             </div>
           </div>
         </div>
