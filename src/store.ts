@@ -57,3 +57,4 @@ export const [uiFps, setUiFps] = createSignal<number>(0);
 export const [summaryData, setSummaryData] = createSignal<LabelSummary | null>(null);
 export const [sortBy, setSortBy] = createSignal<SortBy>("name");
 export const [sortDirection, setSortDirection] = createSignal<SortDirection>("asc");
+export const [targetFrame, setTargetFrame] = createSignal<number | null>(null);

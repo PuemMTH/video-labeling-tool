@@ -9,7 +9,9 @@ import {
     setEvents,
     setVideos,
     videos,
-    LabelEvent
+    LabelEvent,
+    targetFrame,
+    setTargetFrame
 } from "../store";
 import { saveLabels, handleDeleteEvent } from "../actions";
 
@@ -100,7 +102,16 @@ const Editor: Component = () => {
                                 }}
                                 onLoadStart={() => console.log("✓ Video load started")}
                                 onLoadedMetadata={() => console.log("✓ Video metadata loaded")}
-                                onCanPlay={() => console.log("✓ Video ready to play")}
+                                onCanPlay={() => {
+                                    console.log("✓ Video ready to play");
+                                    const target = targetFrame();
+                                    if (target !== null && fps() > 0) {
+                                        if (videoRef) {
+                                            videoRef.currentTime = target / fps();
+                                            setTargetFrame(null);
+                                        }
+                                    }
+                                }}
                                 onError={(e) => {
                                     console.error("✗ Video error:", e);
                                     console.error("✗ Error details:", e.currentTarget.error);

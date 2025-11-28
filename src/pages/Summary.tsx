@@ -1,6 +1,8 @@
 import { Component, onMount, Show, For, createSignal, createMemo } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
-import { summaryData, setSummaryData, LabelSummary } from "../store";
+import { useNavigate } from "@solidjs/router";
+import { summaryData, setSummaryData, LabelSummary, videos, setTargetFrame } from "../store";
+import { handleVideoSelect } from "../actions";
 
 type SortField = "video_name" | "label" | "start_frame" | "duration";
 type SortDirection = "asc" | "desc";
@@ -8,6 +10,7 @@ type SortDirection = "asc" | "desc";
 const Summary: Component = () => {
     const [sortField, setSortField] = createSignal<SortField>("video_name");
     const [sortDirection, setSortDirection] = createSignal<SortDirection>("asc");
+    const navigate = useNavigate();
 
     onMount(async () => {
         const path = localStorage.getItem("lastFolder");
@@ -101,7 +104,17 @@ const Summary: Component = () => {
                             <tbody>
                                 <For each={sortedEvents()}>
                                     {(event) => (
-                                        <tr>
+                                        <tr
+                                            class="hover cursor-pointer"
+                                            onClick={() => {
+                                                const video = videos().find(v => v.path.includes(event.video_name));
+                                                if (video) {
+                                                    handleVideoSelect(video);
+                                                    setTargetFrame(event.start_frame);
+                                                    navigate("/");
+                                                }
+                                            }}
+                                        >
                                             <td class="font-bold">{event.video_name}</td>
                                             <td><div class="badge badge-outline">{event.label}</div></td>
                                             <td>{event.start_frame}</td>
