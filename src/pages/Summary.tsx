@@ -1,8 +1,14 @@
-import { Component, onMount, Show, For } from "solid-js";
+import { Component, onMount, Show, For, createSignal, createMemo } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { summaryData, setSummaryData, LabelSummary } from "../store";
 
+type SortField = "video_name" | "label" | "start_frame" | "duration";
+type SortDirection = "asc" | "desc";
+
 const Summary: Component = () => {
+    const [sortField, setSortField] = createSignal<SortField>("video_name");
+    const [sortDirection, setSortDirection] = createSignal<SortDirection>("asc");
+
     onMount(async () => {
         const path = localStorage.getItem("lastFolder");
         if (path) {
@@ -14,6 +20,43 @@ const Summary: Component = () => {
             }
         }
     });
+
+    const sortedEvents = createMemo(() => {
+        const events = summaryData()?.events || [];
+        const field = sortField();
+        const direction = sortDirection();
+
+        return [...events].sort((a, b) => {
+            let res = 0;
+            if (field === "video_name") {
+                res = a.video_name.localeCompare(b.video_name);
+            } else if (field === "label") {
+                res = a.label.localeCompare(b.label);
+            } else if (field === "start_frame") {
+                res = a.start_frame - b.start_frame;
+            } else if (field === "duration") {
+                const durA = a.end_frame - a.start_frame;
+                const durB = b.end_frame - b.start_frame;
+                res = durA - durB;
+            }
+            return direction === "asc" ? res : -res;
+        });
+    });
+
+    const handleSort = (field: SortField) => {
+        if (sortField() === field) {
+            setSortDirection(sortDirection() === "asc" ? "desc" : "asc");
+        } else {
+            setSortField(field);
+            setSortDirection("asc");
+        }
+    };
+
+    const SortIcon = (props: { field: SortField }) => (
+        <span class="ml-1 inline-block w-4">
+            {sortField() === props.field ? (sortDirection() === "asc" ? "↑" : "↓") : ""}
+        </span>
+    );
 
     return (
         <div class="col-span-9 bg-base-100 rounded-box shadow-lg flex flex-col p-4 overflow-hidden">
@@ -36,19 +79,27 @@ const Summary: Component = () => {
                     </div>
 
                     <div class="flex-1 overflow-auto">
-                        <table class="table table-zebra w-full">
+                        <table class="table table-zebra w-full table-pin-rows">
                             <thead>
-                                <tr>
-                                    <th>Video Name</th>
-                                    <th>Label</th>
-                                    <th>Start Frame</th>
+                                <tr class="cursor-pointer select-none">
+                                    <th onClick={() => handleSort("video_name")}>
+                                        Video Name <SortIcon field="video_name" />
+                                    </th>
+                                    <th onClick={() => handleSort("label")}>
+                                        Label <SortIcon field="label" />
+                                    </th>
+                                    <th onClick={() => handleSort("start_frame")}>
+                                        Start Frame <SortIcon field="start_frame" />
+                                    </th>
                                     <th>End Frame</th>
-                                    <th>Duration (Frames)</th>
+                                    <th onClick={() => handleSort("duration")}>
+                                        Duration (Frames) <SortIcon field="duration" />
+                                    </th>
                                     <th>Duration (Seconds)</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <For each={summaryData()?.events}>
+                                <For each={sortedEvents()}>
                                     {(event) => (
                                         <tr>
                                             <td class="font-bold">{event.video_name}</td>

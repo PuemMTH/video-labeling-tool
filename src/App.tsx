@@ -1,4 +1,4 @@
-import { createSignal, onMount, onCleanup, Show, Component } from "solid-js";
+import { onMount, onCleanup, Show, Component } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { Router, Route } from "@solidjs/router";
 import "./App.css";
