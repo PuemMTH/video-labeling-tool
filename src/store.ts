@@ -3,6 +3,8 @@ import { createSignal } from "solid-js";
 export interface VideoEntry {
     path: string;
     event_count: number;
+    duration_sec: number;
+    last_modified: number;
 }
 
 export interface VideoMetadata {
@@ -39,6 +41,9 @@ export interface LabelSummary {
     events: GlobalEvent[];
 }
 
+export type SortBy = "name" | "duration" | "date";
+export type SortDirection = "asc" | "desc";
+
 // Global State
 export const [videos, setVideos] = createSignal<VideoEntry[]>([]);
 export const [currentVideo, setCurrentVideo] = createSignal<VideoEntry | null>(null);
@@ -50,3 +55,5 @@ export const [totalFrames, setTotalFrames] = createSignal<number>(0);
 export const [appStats, setAppStats] = createSignal<AppStats | null>(null);
 export const [uiFps, setUiFps] = createSignal<number>(0);
 export const [summaryData, setSummaryData] = createSignal<LabelSummary | null>(null);
+export const [sortBy, setSortBy] = createSignal<SortBy>("name");
+export const [sortDirection, setSortDirection] = createSignal<SortDirection>("asc");

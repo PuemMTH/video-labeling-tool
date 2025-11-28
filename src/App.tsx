@@ -82,7 +82,7 @@ const Layout: Component<any> = (props) => {
           </div>
           <div class="flex items-center gap-2" title="Video Frames Per Second">
             <span class="font-bold text-secondary">Video FPS:</span>
-            <span>{fps() || 0}</span>
+            <span>{fps()?.toFixed(2) || "0.0"}</span>
           </div>
           <div class="flex items-center gap-2" title="CPU Usage">
             <span class="font-bold text-accent">CPU:</span>
