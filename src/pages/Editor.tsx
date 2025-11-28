@@ -11,7 +11,9 @@ import {
     videos,
     LabelEvent,
     targetFrame,
-    setTargetFrame
+    setTargetFrame,
+    scrollSensitivity,
+    setScrollSensitivity
 } from "../store";
 import { saveLabels, handleDeleteEvent } from "../actions";
 
@@ -76,9 +78,26 @@ const Editor: Component = () => {
             }
         };
 
+        const handleWheel = (e: WheelEvent) => {
+            // Check if the target is within a scrollable area
+            const target = e.target as HTMLElement;
+            if (target.closest('.overflow-y-auto')) {
+                return; // Let default scroll happen
+            }
+
+            if (videoRef && fps() > 0 && currentVideo()) {
+                e.preventDefault();
+                const frameDelta = Math.sign(e.deltaY) * scrollSensitivity();
+                const timeDelta = frameDelta / fps();
+                videoRef.currentTime = Math.max(0, Math.min(duration(), videoRef.currentTime + timeDelta));
+            }
+        };
+
         window.addEventListener("keydown", handleKeyPress);
+        window.addEventListener("wheel", handleWheel, { passive: false });
         onCleanup(() => {
             window.removeEventListener("keydown", handleKeyPress);
+            window.removeEventListener("wheel", handleWheel);
         });
     });
 
@@ -117,10 +136,25 @@ const Editor: Component = () => {
                                     console.error("✗ Error details:", e.currentTarget.error);
                                 }}
                             />
-                            <div class="text-center py-2">
+                            <div class="text-center py-2 flex flex-col gap-2">
                                 <div class="text-lg font-semibold">
                                     {currentVideo()?.path.split(/[/\\]/).pop()}
                                 </div>
+
+                                {/* Scroll Sensitivity Control */}
+                                <div class="flex items-center justify-center gap-2 text-xs">
+                                    <span>Scroll Sensitivity:</span>
+                                    <input
+                                        type="range"
+                                        min="1"
+                                        max="30"
+                                        value={scrollSensitivity()}
+                                        class="range range-xs range-primary w-24"
+                                        onInput={(e) => setScrollSensitivity(parseInt(e.currentTarget.value))}
+                                    />
+                                    <span>{scrollSensitivity()} frames</span>
+                                </div>
+
                                 <Show when={isRecording()}>
                                     <div class="text-error font-bold animate-pulse">
                                         ● Recording Event... (Press 'w' to stop)

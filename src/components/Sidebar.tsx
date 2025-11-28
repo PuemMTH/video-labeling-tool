@@ -1,29 +1,11 @@
-import { Component, For, Show, createMemo } from "solid-js";
+import { Component, For, Show } from "solid-js";
 import { useLocation, useNavigate } from "@solidjs/router";
-import { videos, currentVideo, sortBy, setSortBy, sortDirection, setSortDirection, SortBy, SortDirection } from "../store";
+import { videos, currentVideo, sortBy, setSortBy, sortDirection, setSortDirection, SortBy, SortDirection, preloadProgress, sortedVideos } from "../store";
 import { handleOpenFolder, handleVideoSelect } from "../actions";
 
 const Sidebar: Component = () => {
     const location = useLocation();
     const navigate = useNavigate();
-
-    const sortedVideos = createMemo(() => {
-        const list = [...videos()];
-        const sort = sortBy();
-        const direction = sortDirection();
-
-        return list.sort((a, b) => {
-            let res = 0;
-            if (sort === "name") {
-                res = a.path.localeCompare(b.path);
-            } else if (sort === "duration") {
-                res = a.duration_sec - b.duration_sec;
-            } else if (sort === "date") {
-                res = a.last_modified - b.last_modified;
-            }
-            return direction === "asc" ? res : -res;
-        });
-    });
 
     const toggleSort = (field: SortBy) => {
         if (sortBy() === field) {
@@ -82,28 +64,38 @@ const Sidebar: Component = () => {
                 <ul class="menu bg-base-100 w-full rounded-box">
                     <li class="menu-title">Videos ({videos().length})</li>
                     <For each={sortedVideos()}>
-                        {(video) => (
-                            <li>
-                                <a
-                                    class={`flex justify-between items-center ${currentVideo()?.path === video.path ? "bg-base-300 font-bold" : ""}`}
-                                    onClick={() => {
-                                        handleVideoSelect(video);
-                                        navigate("/");
-                                    }}
-                                >
-                                    <div class="flex flex-col">
-                                        <span>{video.path.split(/[/\\]/).pop()}</span>
-                                        <span class="text-xs opacity-50">
-                                            {Math.floor(video.duration_sec / 60)}:
-                                            {(video.duration_sec % 60).toFixed(0).padStart(2, "0")}
-                                        </span>
-                                    </div>
-                                    <Show when={video.event_count > 0}>
-                                        <div class="badge badge-sm badge-success">{video.event_count}</div>
-                                    </Show>
-                                </a>
-                            </li>
-                        )}
+                        {(video) => {
+                            const progress = () => preloadProgress().get(video.path);
+                            return (
+                                <li>
+                                    <a
+                                        class={`flex justify-between items-center ${currentVideo()?.path === video.path ? "bg-base-300 font-bold" : ""}`}
+                                        onClick={() => {
+                                            handleVideoSelect(video);
+                                            navigate("/");
+                                        }}
+                                    >
+                                        <div class="flex flex-col w-full">
+                                            <div class="flex items-center justify-between gap-1 w-full">
+                                                <span class="truncate">{video.path.split(/[/\\]/).pop()}</span>
+                                                <Show when={progress() !== undefined}>
+                                                    <div class="radial-progress text-success text-[8px]" style={{ "--value": progress(), "--size": "1rem" }} role="progressbar">
+                                                        {Math.round(progress()!)}%
+                                                    </div>
+                                                </Show>
+                                            </div>
+                                            <span class="text-xs opacity-50">
+                                                {Math.floor(video.duration_sec / 60)}:
+                                                {(video.duration_sec % 60).toFixed(0).padStart(2, "0")}
+                                            </span>
+                                        </div>
+                                        <Show when={video.event_count > 0}>
+                                            <div class="badge badge-sm badge-success ml-2">{video.event_count}</div>
+                                        </Show>
+                                    </a>
+                                </li>
+                            );
+                        }}
                     </For>
                 </ul>
             </div>

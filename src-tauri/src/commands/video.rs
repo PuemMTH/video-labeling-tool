@@ -171,3 +171,18 @@ pub fn register_video(
 
     Ok(format!("http://127.0.0.1:3030/video/{}", id))
 }
+
+#[tauri::command]
+pub fn preload_video_header(path: String) -> Result<(), String> {
+    use std::io::Read;
+
+    // Read first 5MB to warm up OS cache
+    let chunk_size = 5 * 1024 * 1024;
+    let mut file = fs::File::open(&path).map_err(|e| format!("Failed to open file: {}", e))?;
+    let mut buffer = vec![0; chunk_size];
+
+    // We don't care about the result, just want to trigger read
+    let _ = file.read(&mut buffer);
+
+    Ok(())
+}

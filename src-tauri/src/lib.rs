@@ -39,7 +39,8 @@ pub fn run() {
             labels::save_video_labels,
             labels::load_video_labels,
             system::get_app_stats,
-            labels::get_label_summary
+            labels::get_label_summary,
+            video::preload_video_header
         ])
         .setup(|_app| {
             // Start video server after Tauri runtime is ready

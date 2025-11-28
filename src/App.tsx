@@ -6,6 +6,7 @@ import "./App.css";
 import Sidebar from "./components/Sidebar";
 import Editor from "./pages/Editor";
 import Summary from "./pages/Summary";
+import VideoPreloader from "./components/VideoPreloader"; // Added import
 import {
   appStats,
   setAppStats,
@@ -60,9 +61,10 @@ const Layout: Component<any> = (props) => {
   });
 
   return (
-    <div class="h-screen w-screen bg-base-200 flex flex-col">
+    <div class="h-screen w-screen bg-base-200 text-base-content overflow-hidden flex flex-col">
+      <VideoPreloader />
       {/* Top Bar */}
-      <div class="bg-base-100 shadow-sm px-4 py-2 flex justify-between items-center z-10 border-b border-base-300">
+      <div class="navbar bg-base-100 shadow-md z-10 min-h-12 h-12 px-4 py-2 flex justify-between items-center z-10 border-b border-base-300">
         <div class="font-bold text-lg flex items-center gap-2">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-primary">
             <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.347a1.125 1.125 0 0 1 0 1.972l-11.54 6.347a1.125 1.125 0 0 1-1.667-.986V5.653Z" />

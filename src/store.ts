@@ -58,3 +58,24 @@ export const [summaryData, setSummaryData] = createSignal<LabelSummary | null>(n
 export const [sortBy, setSortBy] = createSignal<SortBy>("name");
 export const [sortDirection, setSortDirection] = createSignal<SortDirection>("asc");
 export const [targetFrame, setTargetFrame] = createSignal<number | null>(null);
+export const [scrollSensitivity, setScrollSensitivity] = createSignal<number>(1);
+export const [preloadProgress, setPreloadProgress] = createSignal<Map<string, number>>(new Map());
+
+import { createMemo } from "solid-js";
+export const sortedVideos = createMemo(() => {
+    const list = [...videos()];
+    const sort = sortBy();
+    const direction = sortDirection();
+
+    return list.sort((a, b) => {
+        let res = 0;
+        if (sort === "name") {
+            res = a.path.localeCompare(b.path);
+        } else if (sort === "duration") {
+            res = a.duration_sec - b.duration_sec;
+        } else if (sort === "date") {
+            res = a.last_modified - b.last_modified;
+        }
+        return direction === "asc" ? res : -res;
+    });
+});
