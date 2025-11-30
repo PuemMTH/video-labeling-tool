@@ -257,29 +257,32 @@ const Editor: Component = () => {
                                 </tr>
                             </thead>
                             <tbody>
-                                <For each={events()}>
-                                    {(event, index) => (
+                                <For each={events()
+                                    .map((event, index) => ({ event, originalIndex: index }))
+                                    .sort((a, b) => b.event.start_frame - a.event.start_frame)
+                                }>
+                                    {(item) => (
                                         <tr
-                                            class={`hover cursor-pointer ${currentFrame() >= event.start_frame && currentFrame() <= event.end_frame
+                                            class={`hover cursor-pointer ${currentFrame() >= item.event.start_frame && currentFrame() <= item.event.end_frame
                                                 ? "bg-error text-error-content"
-                                                : currentFrame() >= event.before_start_frame && currentFrame() < event.start_frame
+                                                : currentFrame() >= item.event.before_start_frame && currentFrame() < item.event.start_frame
                                                     ? "bg-warning text-warning-content"
                                                     : ""
                                                 }`}
                                             onClick={() => {
                                                 if (videoRef) {
-                                                    videoRef.currentTime = event.start_frame / fps();
+                                                    videoRef.currentTime = item.event.start_frame / fps();
                                                 }
                                             }}
                                         >
-                                            <td>{event.start_frame} - {event.end_frame}</td>
-                                            <td>{event.label}</td>
+                                            <td>{item.event.start_frame} - {item.event.end_frame}</td>
+                                            <td>{item.event.label}</td>
                                             <td>
                                                 <button
                                                     class="btn btn-xs btn-error hover:bg-error hover:text-error-content"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        handleDeleteEvent(index());
+                                                        handleDeleteEvent(item.originalIndex);
                                                     }}
                                                 >
                                                     <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
