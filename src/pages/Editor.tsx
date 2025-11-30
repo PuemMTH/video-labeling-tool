@@ -23,6 +23,9 @@ const Editor: Component = () => {
     const [startFrame, setStartFrame] = createSignal<number | null>(null);
     const [currentFrame, setCurrentFrame] = createSignal<number>(0);
 
+    const [scrollDirection, setScrollDirection] = createSignal<"Forward" | "Backward" | null>(null);
+    let scrollTimeout: number | undefined;
+
     onMount(() => {
         const handleKeyPress = async (e: KeyboardEvent) => {
             // Spacebar: Play/Pause
@@ -90,6 +93,18 @@ const Editor: Component = () => {
                 const frameDelta = Math.sign(e.deltaY) * scrollSensitivity();
                 const timeDelta = frameDelta / fps();
                 videoRef.currentTime = Math.max(0, Math.min(duration(), videoRef.currentTime + timeDelta));
+
+                // Update scroll direction
+                if (frameDelta > 0) {
+                    setScrollDirection("Forward");
+                } else if (frameDelta < 0) {
+                    setScrollDirection("Backward");
+                }
+
+                if (scrollTimeout) clearTimeout(scrollTimeout);
+                scrollTimeout = window.setTimeout(() => {
+                    setScrollDirection(null);
+                }, 500);
             }
         };
 
@@ -98,13 +113,29 @@ const Editor: Component = () => {
         onCleanup(() => {
             window.removeEventListener("keydown", handleKeyPress);
             window.removeEventListener("wheel", handleWheel);
+            if (scrollTimeout) clearTimeout(scrollTimeout);
         });
     });
+
+    const [showAnnotations, setShowAnnotations] = createSignal(true);
 
     return (
         <>
             {/* Column 2: Video Player */}
-            <div class="col-span-6 bg-base-100 rounded-box shadow-lg flex flex-col p-4">
+            <div class={`${showAnnotations() ? "col-span-6" : "col-span-9"} bg-base-100 rounded-box shadow-lg flex flex-col p-4 transition-all duration-300 relative`}>
+                {/* Expand/Collapse Button (when collapsed) */}
+                <Show when={!showAnnotations()}>
+                    <button
+                        class="absolute top-4 right-4 btn btn-circle btn-sm btn-ghost z-10 bg-base-200/50 hover:bg-base-200"
+                        onClick={() => setShowAnnotations(true)}
+                        title="Show Annotations"
+                    >
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 19.5L8.25 12l7.5-7.5" />
+                        </svg>
+                    </button>
+                </Show>
+
                 <Show when={currentVideo()} fallback={<div class="flex items-center justify-center h-full text-base-content/50">Select a video to preview</div>}>
                     <Show when={videoSrc()}>
                         <div class="flex flex-col w-full gap-2">
@@ -139,6 +170,9 @@ const Editor: Component = () => {
                             <div class="text-center py-2 flex flex-col gap-2">
                                 <div class="text-lg font-semibold">
                                     {currentVideo()?.path.split(/[/\\]/).pop()}
+                                    <Show when={scrollDirection()}>
+                                        <span class="badge badge-info badge-sm animate-pulse ml-2">{scrollDirection()}</span>
+                                    </Show>
                                 </div>
 
                                 {/* Scroll Sensitivity Control */}
@@ -153,11 +187,15 @@ const Editor: Component = () => {
                                         onInput={(e) => setScrollSensitivity(parseInt(e.currentTarget.value))}
                                     />
                                     <span>{scrollSensitivity()} frames</span>
+
                                 </div>
 
                                 <Show when={isRecording()}>
                                     <div class="text-error font-bold animate-pulse">
                                         ● Recording Event... (Press 'w' to stop)
+                                    </div>
+                                    <div class="text-sm font-mono mt-1">
+                                        Duration: {(Math.abs(currentFrame() - (startFrame() || 0)) / fps()).toFixed(2)}s ({Math.abs(currentFrame() - (startFrame() || 0))} frames)
                                     </div>
                                 </Show>
                                 <Show when={!isRecording() && fps() > 0}>
@@ -242,62 +280,81 @@ const Editor: Component = () => {
             </div>
 
             {/* Column 3: Annotations */}
-            <div class="col-span-3 bg-base-100 rounded-box shadow-lg flex flex-col overflow-hidden">
-                <div class="p-4 border-b border-base-300">
-                    <h2 class="text-xl font-bold">Annotations</h2>
-                </div>
-                <div class="flex-1 overflow-y-auto p-4">
-                    <div class="overflow-x-auto">
-                        <table class="table table-zebra w-full">
-                            <thead>
-                                <tr>
-                                    <th>Time</th>
-                                    <th>Label</th>
-                                    <th>Action</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <For each={events()
-                                    .map((event, index) => ({ event, originalIndex: index }))
-                                    .sort((a, b) => b.event.start_frame - a.event.start_frame)
-                                }>
-                                    {(item) => (
-                                        <tr
-                                            class={`hover cursor-pointer ${currentFrame() >= item.event.start_frame && currentFrame() <= item.event.end_frame
-                                                ? "bg-error text-error-content"
-                                                : currentFrame() >= item.event.before_start_frame && currentFrame() < item.event.start_frame
-                                                    ? "bg-warning text-warning-content"
-                                                    : ""
-                                                }`}
-                                            onClick={() => {
-                                                if (videoRef) {
-                                                    videoRef.currentTime = item.event.start_frame / fps();
-                                                }
-                                            }}
-                                        >
-                                            <td>{item.event.start_frame} - {item.event.end_frame}</td>
-                                            <td>{item.event.label}</td>
-                                            <td>
-                                                <button
-                                                    class="btn btn-xs btn-error hover:bg-error hover:text-error-content"
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        handleDeleteEvent(item.originalIndex);
-                                                    }}
-                                                >
-                                                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
-                                                        <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                                                    </svg>
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    )}
-                                </For>
-                            </tbody>
-                        </table>
+            <Show when={showAnnotations()}>
+                <div class="col-span-3 bg-base-100 rounded-box shadow-lg flex flex-col overflow-hidden transition-all duration-300">
+                    <div class="p-4 border-b border-base-300 flex justify-between items-center">
+                        <h2 class="text-xl font-bold">Annotations</h2>
+                        <button
+                            class="btn btn-ghost btn-circle btn-sm"
+                            onClick={() => setShowAnnotations(false)}
+                            title="Hide Annotations"
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-5 h-5">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="flex-1 overflow-y-auto p-4">
+                        <div class="overflow-x-auto">
+                            <table class="table table-zebra w-full table-xs">
+                                <thead>
+                                    <tr>
+                                        <th>Frames</th>
+                                        <th>Time (s)</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <For each={events()
+                                        .map((event, index) => ({ event, originalIndex: index }))
+                                        .sort((a, b) => b.event.start_frame - a.event.start_frame)
+                                    }>
+                                        {(item) => (
+                                            <tr
+                                                class={`hover cursor-pointer ${currentFrame() >= item.event.start_frame && currentFrame() <= item.event.end_frame
+                                                    ? "bg-error text-error-content"
+                                                    : currentFrame() >= item.event.before_start_frame && currentFrame() < item.event.start_frame
+                                                        ? "bg-warning text-warning-content"
+                                                        : ""
+                                                    }`}
+                                                onClick={() => {
+                                                    if (videoRef) {
+                                                        videoRef.currentTime = item.event.start_frame / fps();
+                                                    }
+                                                }}
+                                            >
+                                                <td>
+                                                    <div class="font-mono text-xs">
+                                                        {item.event.start_frame} - {item.event.end_frame}
+                                                    </div>
+                                                </td>
+                                                <td>
+                                                    <div class="font-mono text-xs">
+                                                        {((item.event.end_frame - item.event.start_frame) / fps()).toFixed(2)}s
+                                                    </div>
+                                                </td>
+                                                <td>
+                                                    <button
+                                                        class="btn btn-xs btn-error hover:bg-error hover:text-error-content"
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            handleDeleteEvent(item.originalIndex);
+                                                        }}
+                                                    >
+                                                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                                                        </svg>
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </For>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
-            </div>
+            </Show>
         </>
     );
 };
