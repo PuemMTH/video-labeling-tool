@@ -17,13 +17,43 @@ import {
     LabelEvent
 } from "./store";
 
+import { listen } from "@tauri-apps/api/event";
+
+let unlistenVideoFound: (() => void) | null = null;
+let unlistenScanComplete: (() => void) | null = null;
+
 export async function loadVideos(path: string) {
     try {
-        const videoEntries = await invoke<VideoEntry[]>("scan_videos", { path });
-        setVideos(videoEntries);
+        setVideos([]);
         setCurrentVideo(null);
         setVideoSrc(null);
         localStorage.setItem("lastFolder", path);
+
+        if (unlistenVideoFound) {
+            unlistenVideoFound();
+            unlistenVideoFound = null;
+        }
+        if (unlistenScanComplete) {
+            unlistenScanComplete();
+            unlistenScanComplete = null;
+        }
+
+        unlistenVideoFound = await listen<VideoEntry>("video-found", (event) => {
+            setVideos((prev) => [...prev, event.payload]);
+        });
+
+        unlistenScanComplete = await listen("scan-complete", () => {
+            if (unlistenVideoFound) {
+                unlistenVideoFound();
+                unlistenVideoFound = null;
+            }
+            if (unlistenScanComplete) {
+                unlistenScanComplete();
+                unlistenScanComplete = null;
+            }
+        });
+
+        await invoke("scan_videos", { path });
     } catch (error) {
         console.error("Error scanning videos:", error);
     }

@@ -276,7 +276,7 @@ const Editor: Component = () => {
                                             <td>{event.label}</td>
                                             <td>
                                                 <button
-                                                    class="btn btn-ghost btn-xs text-error"
+                                                    class="btn btn-xs btn-error hover:bg-error hover:text-error-content"
                                                     onClick={(e) => {
                                                         e.stopPropagation();
                                                         handleDeleteEvent(index());

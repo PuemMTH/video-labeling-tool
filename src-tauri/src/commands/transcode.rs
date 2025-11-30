@@ -1,5 +1,7 @@
 use sha2::{Digest, Sha256};
 use std::process::{Command, Stdio};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::thread;
 use tauri::Manager;
 
@@ -40,7 +42,11 @@ pub fn start_progressive_transcode(
 
     thread::spawn(move || {
         // Check for GPU support (NVENC)
-        let use_gpu = Command::new("ffmpeg")
+        let mut cmd = Command::new("ffmpeg");
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000);
+
+        let use_gpu = cmd
             .args([
                 "-v",
                 "error",
@@ -114,7 +120,11 @@ pub fn start_progressive_transcode(
             output_path_clone.to_string_lossy().to_string(),
         ]);
 
-        let _ = Command::new("ffmpeg")
+        let mut cmd = Command::new("ffmpeg");
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000);
+
+        let _ = cmd
             .args(&args)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -163,7 +173,11 @@ pub fn get_transcode_progress(app: tauri::AppHandle, video_path: String) -> Resu
 
 #[tauri::command]
 pub fn check_ffmpeg() -> Result<String, String> {
-    let output = Command::new("ffmpeg")
+    let mut cmd = Command::new("ffmpeg");
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+
+    let output = cmd
         .arg("-version")
         .output()
         .map_err(|_| "FFmpeg not found. Please install FFmpeg.".to_string())?;

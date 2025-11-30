@@ -4,80 +4,91 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::thread;
+use tauri::{Emitter, Manager};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 
 #[tauri::command]
-pub fn scan_videos(path: String) -> Vec<VideoEntry> {
-    let mut videos = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(path) {
-        for entry in entries {
-            if let Ok(entry) = entry {
-                let path = entry.path();
-                if path.is_file() {
-                    if let Some(extension) = path.extension() {
-                        let ext = extension.to_string_lossy().to_lowercase();
-                        if ["mp4", "webm", "mkv", "avi", "mov", "flv", "wmv", "m4v"]
-                            .contains(&ext.as_str())
-                        {
-                            if let Some(path_str) = path.to_str() {
-                                let file_stem = path.file_stem().unwrap_or_default();
-                                let json_path = path.with_file_name(format!(
-                                    "{}.json",
-                                    file_stem.to_string_lossy()
-                                ));
+pub fn scan_videos(app: tauri::AppHandle, path: String) {
+    thread::spawn(move || {
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries {
+                if let Ok(entry) = entry {
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(extension) = path.extension() {
+                            let ext = extension.to_string_lossy().to_lowercase();
+                            if ["mp4", "webm", "mkv", "avi", "mov", "flv", "wmv", "m4v"]
+                                .contains(&ext.as_str())
+                            {
+                                if let Some(path_str) = path.to_str() {
+                                    let file_stem = path.file_stem().unwrap_or_default();
+                                    let json_path = path.with_file_name(format!(
+                                        "{}.json",
+                                        file_stem.to_string_lossy()
+                                    ));
 
-                                let mut event_count = 0;
-                                if json_path.exists() {
-                                    if let Ok(content) = std::fs::read_to_string(&json_path) {
-                                        if let Ok(json) =
-                                            serde_json::from_str::<serde_json::Value>(&content)
-                                        {
-                                            if let Some(events) = json["events"].as_array() {
-                                                event_count = events.len();
+                                    let mut event_count = 0;
+                                    if json_path.exists() {
+                                        if let Ok(content) = std::fs::read_to_string(&json_path) {
+                                            if let Ok(json) =
+                                                serde_json::from_str::<serde_json::Value>(&content)
+                                            {
+                                                if let Some(events) = json["events"].as_array() {
+                                                    event_count = events.len();
+                                                }
                                             }
                                         }
                                     }
-                                }
 
-                                let mut duration_sec = 0.0;
-                                if let Ok(output) = Command::new("ffprobe")
-                                    .args([
-                                        "-v",
-                                        "error",
-                                        "-show_entries",
-                                        "format=duration",
-                                        "-of",
-                                        "default=noprint_wrappers=1:nokey=1",
-                                        path_str,
-                                    ])
-                                    .output()
-                                {
-                                    if output.status.success() {
-                                        let duration_str = String::from_utf8_lossy(&output.stdout);
-                                        duration_sec = duration_str.trim().parse().unwrap_or(0.0);
+                                    let mut duration_sec = 0.0;
+                                    let mut cmd = Command::new("ffprobe");
+                                    #[cfg(target_os = "windows")]
+                                    cmd.creation_flags(0x08000000);
+                                    
+                                    if let Ok(output) = cmd
+                                        .args([
+                                            "-v",
+                                            "error",
+                                            "-show_entries",
+                                            "format=duration",
+                                            "-of",
+                                            "default=noprint_wrappers=1:nokey=1",
+                                            path_str,
+                                        ])
+                                        .output()
+                                    {
+                                        if output.status.success() {
+                                            let duration_str = String::from_utf8_lossy(&output.stdout);
+                                            duration_sec = duration_str.trim().parse().unwrap_or(0.0);
+                                        }
                                     }
+
+                                    let last_modified = std::fs::metadata(&path)
+                                        .and_then(|m| m.modified())
+                                        .ok()
+                                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                        .map(|d| d.as_secs())
+                                        .unwrap_or(0);
+
+                                    let video_entry = VideoEntry {
+                                        path: path_str.to_string(),
+                                        event_count,
+                                        duration_sec,
+                                        last_modified,
+                                    };
+
+                                    let _ = app.emit("video-found", video_entry);
                                 }
-
-                                let last_modified = std::fs::metadata(&path)
-                                    .and_then(|m| m.modified())
-                                    .ok()
-                                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                                    .map(|d| d.as_secs())
-                                    .unwrap_or(0);
-
-                                videos.push(VideoEntry {
-                                    path: path_str.to_string(),
-                                    event_count,
-                                    duration_sec,
-                                    last_modified,
-                                });
                             }
                         }
                     }
                 }
             }
         }
-    }
-    videos
+        let _ = app.emit("scan-complete", ());
+    });
 }
 
 #[tauri::command]
@@ -98,7 +109,11 @@ pub fn get_video_size(path: String) -> Result<u64, String> {
 
 #[tauri::command]
 pub fn get_video_metadata(path: String) -> Result<VideoMetadata, String> {
-    let output = Command::new("ffprobe")
+    let mut cmd = Command::new("ffprobe");
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000);
+
+    let output = cmd
         .args([
             "-v",
             "error",
