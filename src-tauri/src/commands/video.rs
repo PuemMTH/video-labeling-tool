@@ -3,89 +3,94 @@ use crate::state::VideoRegistry;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::thread;
-use tauri::{Emitter, Manager};
-#[cfg(target_os = "windows")]
-use std::os::windows::process::CommandExt;
+use tauri::{Emitter};
+
+fn get_mp4_metadata_internal(path: &std::path::Path) -> Result<(f64, f64), String> {
+    let file = fs::File::open(path).map_err(|e| e.to_string())?;
+    let size = file.metadata().map_err(|e| e.to_string())?.len();
+    let mp4 = mp4::Mp4Reader::read_header(file, size).map_err(|e| e.to_string())?;
+
+    let duration = mp4.duration().as_secs_f64();
+    
+    let mut fps = 0.0;
+    // Find video track to calculate FPS
+    for track in mp4.tracks().values() {
+        if let Ok(mp4::TrackType::Video) = track.track_type() {
+            let duration = track.duration();
+            if !duration.is_zero() {
+                let duration_sec = duration.as_secs_f64();
+                if duration_sec > 0.0 {
+                    fps = track.sample_count() as f64 / duration_sec;
+                }
+            }
+            break;
+        }
+    }
+
+    Ok((duration, fps))
+}
 
 #[tauri::command]
 pub fn scan_videos(app: tauri::AppHandle, path: String) {
     thread::spawn(move || {
+        use rayon::prelude::*;
+        
         if let Ok(entries) = std::fs::read_dir(path) {
-            for entry in entries {
-                if let Ok(entry) = entry {
-                    let path = entry.path();
-                    if path.is_file() {
-                        if let Some(extension) = path.extension() {
-                            let ext = extension.to_string_lossy().to_lowercase();
-                            if ["mp4", "webm", "mkv", "avi", "mov", "flv", "wmv", "m4v"]
-                                .contains(&ext.as_str())
-                            {
-                                if let Some(path_str) = path.to_str() {
-                                    let file_stem = path.file_stem().unwrap_or_default();
-                                    let json_path = path.with_file_name(format!(
-                                        "{}.json",
-                                        file_stem.to_string_lossy()
-                                    ));
+            let entries: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+            
+            entries.par_iter().for_each(|entry| {
+                let path = entry.path();
+                if path.is_file() {
+                    if let Some(extension) = path.extension() {
+                        let ext = extension.to_string_lossy().to_lowercase();
+                        // We focus on MP4/MOV for metadata, but list others
+                        if ["mp4", "webm", "mkv", "avi", "mov", "flv", "wmv", "m4v"]
+                            .contains(&ext.as_str())
+                        {
+                            if let Some(path_str) = path.to_str() {
+                                let file_stem = path.file_stem().unwrap_or_default();
+                                let json_path = path.with_file_name(format!(
+                                    "{}.json",
+                                    file_stem.to_string_lossy()
+                                ));
 
-                                    let mut event_count = 0;
-                                    if json_path.exists() {
-                                        if let Ok(content) = std::fs::read_to_string(&json_path) {
-                                            if let Ok(json) =
-                                                serde_json::from_str::<serde_json::Value>(&content)
-                                            {
-                                                if let Some(events) = json["events"].as_array() {
-                                                    event_count = events.len();
-                                                }
+                                let mut event_count = 0;
+                                if json_path.exists() {
+                                    if let Ok(content) = std::fs::read_to_string(&json_path) {
+                                        if let Ok(json) =
+                                            serde_json::from_str::<serde_json::Value>(&content)
+                                        {
+                                            if let Some(events) = json["events"].as_array() {
+                                                event_count = events.len();
                                             }
                                         }
                                     }
-
-                                    let mut duration_sec = 0.0;
-                                    let mut cmd = Command::new("ffprobe");
-                                    #[cfg(target_os = "windows")]
-                                    cmd.creation_flags(0x08000000);
-                                    
-                                    if let Ok(output) = cmd
-                                        .args([
-                                            "-v",
-                                            "error",
-                                            "-show_entries",
-                                            "format=duration",
-                                            "-of",
-                                            "default=noprint_wrappers=1:nokey=1",
-                                            path_str,
-                                        ])
-                                        .output()
-                                    {
-                                        if output.status.success() {
-                                            let duration_str = String::from_utf8_lossy(&output.stdout);
-                                            duration_sec = duration_str.trim().parse().unwrap_or(0.0);
-                                        }
-                                    }
-
-                                    let last_modified = std::fs::metadata(&path)
-                                        .and_then(|m| m.modified())
-                                        .ok()
-                                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                                        .map(|d| d.as_secs())
-                                        .unwrap_or(0);
-
-                                    let video_entry = VideoEntry {
-                                        path: path_str.to_string(),
-                                        event_count,
-                                        duration_sec,
-                                        last_modified,
-                                    };
-
-                                    let _ = app.emit("video-found", video_entry);
                                 }
+
+                                // Try to get duration from MP4 crate, else 0.0
+                                let (duration_sec, _) = get_mp4_metadata_internal(&path).unwrap_or((0.0, 0.0));
+
+                                let last_modified = std::fs::metadata(&path)
+                                    .and_then(|m| m.modified())
+                                    .ok()
+                                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0);
+
+                                let video_entry = VideoEntry {
+                                    path: path_str.to_string(),
+                                    event_count,
+                                    duration_sec,
+                                    last_modified,
+                                };
+
+                                let _ = app.emit("video-found", video_entry);
                             }
                         }
                     }
                 }
-            }
+            });
         }
         let _ = app.emit("scan-complete", ());
     });
@@ -109,64 +114,9 @@ pub fn get_video_size(path: String) -> Result<u64, String> {
 
 #[tauri::command]
 pub fn get_video_metadata(path: String) -> Result<VideoMetadata, String> {
-    let mut cmd = Command::new("ffprobe");
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x08000000);
-
-    let output = cmd
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "v:0",
-            "-show_entries",
-            "stream=r_frame_rate,duration",
-            "-of",
-            "json",
-            &path,
-        ])
-        .output()
-        .map_err(|e| format!("Failed to run ffprobe: {}", e))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "ffprobe failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    println!("ffprobe output for {}: {}", path, output_str);
-    let json: serde_json::Value =
-        serde_json::from_str(&output_str).map_err(|e| format!("Failed to parse JSON: {}", e))?;
-
-    let stream = &json["streams"][0];
-
-    // Parse FPS (e.g., "30/1" or "29.97")
-    let r_frame_rate = stream["r_frame_rate"].as_str().ok_or("FPS not found")?;
-
-    let fps = if r_frame_rate.contains('/') {
-        let parts: Vec<&str> = r_frame_rate.split('/').collect();
-        if parts.len() == 2 {
-            let num: f64 = parts[0].parse().unwrap_or(0.0);
-            let den: f64 = parts[1].parse().unwrap_or(1.0);
-            if den == 0.0 {
-                0.0
-            } else {
-                num / den
-            }
-        } else {
-            0.0
-        }
-    } else {
-        r_frame_rate.parse().unwrap_or(0.0)
-    };
-
-    let duration: f64 = stream["duration"]
-        .as_str()
-        .unwrap_or("0")
-        .parse()
-        .unwrap_or(0.0);
+    let path_buf = PathBuf::from(&path);
+    let (duration, fps) = get_mp4_metadata_internal(&path_buf)
+        .map_err(|e| format!("Failed to read MP4 metadata: {}", e))?;
 
     Ok(VideoMetadata { fps, duration })
 }
@@ -187,17 +137,3 @@ pub fn register_video(
     Ok(format!("http://127.0.0.1:3030/video/{}", id))
 }
 
-#[tauri::command]
-pub fn preload_video_header(path: String) -> Result<(), String> {
-    use std::io::Read;
-
-    // Read first 5MB to warm up OS cache
-    let chunk_size = 5 * 1024 * 1024;
-    let mut file = fs::File::open(&path).map_err(|e| format!("Failed to open file: {}", e))?;
-    let mut buffer = vec![0; chunk_size];
-
-    // We don't care about the result, just want to trigger read
-    let _ = file.read(&mut buffer);
-
-    Ok(())
-}

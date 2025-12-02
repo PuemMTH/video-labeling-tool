@@ -6,7 +6,6 @@ import "./App.css";
 import Sidebar from "./components/Sidebar";
 import Editor from "./pages/Editor";
 import Summary from "./pages/Summary";
-import VideoPreloader from "./components/VideoPreloader"; // Added import
 import {
   appStats,
   setAppStats,
@@ -62,7 +61,7 @@ const Layout: Component<any> = (props) => {
 
   return (
     <div class="h-screen w-screen bg-base-200 text-base-content overflow-hidden flex flex-col">
-      <VideoPreloader />
+
       {/* Top Bar */}
       <div class="navbar bg-base-100 shadow-md z-10 min-h-12 h-12 px-4 py-2 flex justify-between items-center z-10 border-b border-base-300">
         <div class="font-bold text-lg flex items-center gap-2">
