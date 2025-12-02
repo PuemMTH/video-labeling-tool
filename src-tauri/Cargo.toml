@@ -33,5 +33,13 @@ tower-http = { version = "0.5", features = ["fs", "cors"] }
 sysinfo = "0.30"
 nvml-wrapper = "0.10"
 mp4 = "0.14"
-rayon = "1.10"
+windows = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_Shell",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_System_Com_StructuredStorage",
+] }
 

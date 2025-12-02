@@ -4784,7 +4784,6 @@ dependencies = [
  "hex",
  "mp4",
  "nvml-wrapper",
- "rayon",
  "serde",
  "serde_json",
  "sha2",
@@ -4797,6 +4796,7 @@ dependencies = [
  "tokio",
  "tower 0.4.13",
  "tower-http 0.5.2",
+ "windows 0.52.0",
 ]
 
 [[package]]
