@@ -3,7 +3,7 @@ pub mod models;
 pub mod server;
 pub mod state;
 
-use commands::{labels, misc, system, transcode, video};
+use commands::{labels, misc, system, video};
 use nvml_wrapper::Nvml;
 use state::{AppMonitorState, VideoRegistry};
 use std::collections::HashMap;
@@ -29,9 +29,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             misc::greet,
             video::scan_videos,
-            transcode::start_progressive_transcode,
-            transcode::get_transcode_progress,
-            transcode::check_ffmpeg,
             video::read_video_chunk,
             video::get_video_size,
             video::register_video,
@@ -39,8 +36,7 @@ pub fn run() {
             labels::save_video_labels,
             labels::load_video_labels,
             system::get_app_stats,
-            labels::get_label_summary,
-            video::preload_video_header
+            labels::get_label_summary
         ])
         .setup(|_app| {
             // Start video server after Tauri runtime is ready
